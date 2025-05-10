@@ -187,64 +187,50 @@ function script_properties()
     obs.source_list_release(sources)
   end
 
-  -- Position React Checkbox
-  local position_react = obs.obs_properties_add_bool(p, "position_react", "Position React")
-
-  -- Start Mode List
-  local start_mode = obs.obs_properties_add_list(p, "start_mode", "Start Mode", obs.OBS_COMBO_TYPE_LIST, obs.OBS_COMBO_FORMAT_INT)
-  obs.obs_property_list_add_int(start_mode, "Current Position", 0)
-  obs.obs_property_list_add_int(start_mode, "Custom Position", 1)
-
-  -- Set callback to handle visibility of custom fields when start mode changes
-  obs.obs_property_set_modified_callback(start_mode, function(props, property, settings)
-    local enabled = obs.obs_data_get_bool(settings, "position_react")
+  -- Position React group
+  local pos_props = obs.obs_properties_create()
+  -- Start Mode List inside Position React group
+  local start_mode_prop = obs.obs_properties_add_list(pos_props, "start_mode", "Start Mode", obs.OBS_COMBO_TYPE_LIST, obs.OBS_COMBO_FORMAT_INT)
+  obs.obs_property_list_add_int(start_mode_prop, "Current Position", 0)
+  obs.obs_property_list_add_int(start_mode_prop, "Custom Position", 1)
+  -- Callback to show/hide custom X/Y
+  obs.obs_property_set_modified_callback(start_mode_prop, function(props, property, settings)
     local sm = obs.obs_data_get_int(settings, "start_mode")
-    obs.obs_property_set_visible(obs.obs_properties_get(props, "start_x"), enabled and sm == 1)
-    obs.obs_property_set_visible(obs.obs_properties_get(props, "start_y"), enabled and sm == 1)
+    obs.obs_property_set_visible(obs.obs_properties_get(pos_props, "start_x"), sm == 1)
+    obs.obs_property_set_visible(obs.obs_properties_get(pos_props, "start_y"), sm == 1)
     return true
   end)
-
   -- Custom Position X and Y
-  local start_x = obs.obs_properties_add_int(p, "start_x", "Custom X (px)", -10000, 10000, 1)
-  local start_y = obs.obs_properties_add_int(p, "start_y", "Custom Y (px)", -10000, 10000, 1)
+  local start_x = obs.obs_properties_add_int(pos_props, "start_x", "Custom X (px)", -10000, 10000, 1)
+  local start_y = obs.obs_properties_add_int(pos_props, "start_y", "Custom Y (px)", -10000, 10000, 1)
+  -- Initially hide these until needed
+  obs.obs_property_set_visible(start_x, false)
+  obs.obs_property_set_visible(start_y, false)
+  obs.obs_properties_add_int(pos_props, "move_range_x", "X Range (px)", 0, 1000, 1)
+  obs.obs_properties_add_int(pos_props, "move_range_y", "Y Range (px)", 0, 1000, 1)
+  obs.obs_properties_add_float_slider(pos_props, "smoothing", "Smoothing Factor (Position)", 0.0, 1.0, 0.01)
+  obs.obs_properties_add_group(p, "position_react", "Position React", obs.OBS_GROUP_CHECKABLE, pos_props)
 
-  -- X and Y Range
-  local move_range_x = obs.obs_properties_add_int(p, "move_range_x", "X Range (px)", 0, 1000, 1)
-  local move_range_y = obs.obs_properties_add_int(p, "move_range_y", "Y Range (px)", 0, 1000, 1)
+  -- Scale React group
+  local scale_props = obs.obs_properties_create()
+  obs.obs_properties_add_float(scale_props, "scale_click_left", "Scale on Left-Click", 0.0, 10.0, 0.01)
+  obs.obs_properties_add_float(scale_props, "scale_click_right", "Scale on Right-Click", 0.0, 10.0, 0.01)
+  obs.obs_properties_add_float_slider(scale_props, "scale_smoothing", "Smoothing Factor (Scale)", 0.0, 1.0, 0.01)
+  obs.obs_properties_add_group(p, "scale_react", "Scale React", obs.OBS_GROUP_CHECKABLE, scale_props)
 
-  -- Smoothing Factor for Position (slider)
-  local smoothing = obs.obs_properties_add_float_slider(p, "smoothing", "Smoothing Factor (Position)", 0.0, 1.0, 0.01)
-
-  -- Scale React Checkbox
-  local scale_react = obs.obs_properties_add_bool(p, "scale_react", "Scale React")
-
-  -- Scale on Left and Right Click
-  local scale_click_left = obs.obs_properties_add_float(p, "scale_click_left", "Scale on Left-Click", 0.0, 10.0, 0.01)
-  local scale_click_right = obs.obs_properties_add_float(p, "scale_click_right", "Scale on Right-Click", 0.0, 10.0, 0.01)
-
-  -- Smoothing Factor for Scale
-  local scale_smoothing = obs.obs_properties_add_float_slider(p, "scale_smoothing", "Smoothing Factor (Scale)", 0.0, 1.0, 0.01)
-
-  -- Wiggle Checkbox
-  local wiggle = obs.obs_properties_add_bool(p, "wiggle", "Wiggle")
-
-  -- Rotation Amplitude and Speed
-  local rotation_amp = obs.obs_properties_add_float(p, "rotation_amp", "Rotation Amplitude (°)", 0.0, 180.0, 1.0)
-  local rotation_speed = obs.obs_properties_add_float(p, "rotation_speed", "Rotations per Second", 0.0, 10.0, 0.1)
-
-  -- Smoothing Factor for Rotation
-  local rotation_smoothing = obs.obs_properties_add_float_slider(p, "rotation_smoothing", "Smoothing Factor (Rotation)", 0.0, 1.0, 0.01)
-
-  -- Position Wiggle options
-  local wiggle_pos_amp_x = obs.obs_properties_add_int(p, "wiggle_pos_amp_x", "Position Wiggle Amplitude X (px)", 0, 1000, 1)
-  local wiggle_pos_amp_y = obs.obs_properties_add_int(p, "wiggle_pos_amp_y", "Position Wiggle Amplitude Y (px)", 0, 1000, 1)
-  local wiggle_pos_speed = obs.obs_properties_add_float(p, "wiggle_pos_speed", "Position Wiggle Speed (Hz)", 0.0, 10.0, 0.1)
-  local wiggle_pos_smoothing = obs.obs_properties_add_float_slider(p, "wiggle_pos_smoothing", "Position Wiggle Smoothing", 0.0, 1.0, 0.01)
-
-  -- Scale Wiggle options
-  local wiggle_scale_amp = obs.obs_properties_add_float(p, "wiggle_scale_amp", "Scale Wiggle Amplitude", 0.0, 10.0, 0.1)
-  local wiggle_scale_speed = obs.obs_properties_add_float(p, "wiggle_scale_speed", "Scale Wiggle Speed (Hz)", 0.0, 10.0, 0.1)
-  local wiggle_scale_smoothing = obs.obs_properties_add_float_slider(p, "wiggle_scale_smoothing", "Scale Wiggle Smoothing", 0.0, 1.0, 0.01)
+  -- Wiggle group
+  local wig_props = obs.obs_properties_create()
+  obs.obs_properties_add_float(wig_props, "rotation_amp", "Rotation Amplitude (°)", 0.0, 180.0, 1.0)
+  obs.obs_properties_add_float(wig_props, "rotation_speed", "Rotations per Second", 0.0, 10.0, 0.1)
+  obs.obs_properties_add_float_slider(wig_props, "rotation_smoothing", "Smoothing Factor (Rotation)", 0.0, 1.0, 0.01)
+  obs.obs_properties_add_int(wig_props, "wiggle_pos_amp_x", "Position Wiggle Amp X (px)", 0, 1000, 1)
+  obs.obs_properties_add_int(wig_props, "wiggle_pos_amp_y", "Position Wiggle Amp Y (px)", 0, 1000, 1)
+  obs.obs_properties_add_float(wig_props, "wiggle_pos_speed", "Position Wiggle Speed (Hz)", 0.0, 10.0, 0.1)
+  obs.obs_properties_add_float_slider(wig_props, "wiggle_pos_smoothing", "Position Wiggle Smoothing", 0.0, 1.0, 0.01)
+  obs.obs_properties_add_float(wig_props, "wiggle_scale_amp", "Scale Wiggle Amp", 0.0, 10.0, 0.1)
+  obs.obs_properties_add_float(wig_props, "wiggle_scale_speed", "Scale Wiggle Speed (Hz)", 0.0, 10.0, 0.1)
+  obs.obs_properties_add_float_slider(wig_props, "wiggle_scale_smoothing", "Scale Wiggle Smoothing", 0.0, 1.0, 0.01)
+  obs.obs_properties_add_group(p, "wiggle", "Wiggle", obs.OBS_GROUP_CHECKABLE, wig_props)
 
   -- Update Interval
   obs.obs_properties_add_int(p, "update_interval_ms", "Update Interval (ms)", 1, 1000, 1)
@@ -339,6 +325,15 @@ function script_update(s)
   wiggle_scale_amp    = obs.obs_data_get_double (s, "wiggle_scale_amp")
   wiggle_scale_speed  = obs.obs_data_get_double (s, "wiggle_scale_speed")
   wiggle_scale_smoothing = obs.obs_data_get_double(s, "wiggle_scale_smoothing")
+
+  -- Reset internal state to reinitialize base position and other properties when settings change
+  base_pos_x   = nil
+  base_pos_y   = nil
+  cur_pos_x    = nil
+  cur_pos_y    = nil
+  cur_rot      = nil
+  cur_scale    = nil
+  frame        = 0
 
   obs.timer_remove(on_tick)
   obs.timer_add(on_tick, update_interval_ms)
