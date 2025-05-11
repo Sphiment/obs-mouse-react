@@ -4,6 +4,26 @@
 
 obs = obslua
 
+-- Cache math functions and constants locally for performance
+local sin, cos, floor = math.sin, math.cos, math.floor
+local twopi = 2 * math.pi
+local function round(x) return floor(x + 0.5) end
+local vec2 = obs.vec2
+
+-- Cache functions and constants for performance
+local sin, cos, floor = math.sin, math.cos, math.floor
+local twopi = math.pi * 2
+local round = function(x) return floor(x + 0.5) end
+local vec2 = obs.vec2
+local obs_get_source = obs.obs_get_source_by_name
+local obs_source_release = obs.obs_source_release
+local obs_scene_from_source = obs.obs_scene_from_source
+local obs_scene_find_source = obs.obs_scene_find_source
+local obs_timer_remove, obs_timer_add = obs.timer_remove, obs.timer_add
+local obs_set_pos = obs.obs_sceneitem_set_pos
+local obs_set_rot = obs.obs_sceneitem_set_rot
+local obs_set_scale = obs.obs_sceneitem_set_scale
+
 -- ─── Platform helper module ─────────────────────────────────────────────────
 local ffi = require("ffi")
 local bit = require("bit")
@@ -120,28 +140,6 @@ end
 -- Initialize platform
 local Platform = initialize_platform()
 
--- ─── User‐configurable settings ────────────────────────────────────────────────
-scene_name          = ""
-source_name         = ""
-move_range_x        = 200
-move_range_y        = 100
-rotation_amp        = 10.0
-scale_click_left    = 0.8
-scale_click_right   = 1.2
-update_interval_ms  = 20
-start_mode          = 0
-start_x             = 0
-start_y             = 0
-smoothing           = 0.2
--- Add new user-configurable defaults
-position_react       = true
-scale_react          = true
-wiggle               = true
-scale_smoothing      = 0.2
-rotation_speed       = 1.0  -- rotations per second
-rotation_smoothing   = 0.2
--- ──────────────────────────────────────────────────────────────────────────────
-
 -- Internal state
 frame       = 0
 base_pos_x  = nil
@@ -154,21 +152,27 @@ cur_scale   = nil
 -- Store current settings for initializing visibility
 local my_settings = nil
 
+-- Store previous settings for conditional resets
+local prev_scene_name = nil
+local prev_source_name = nil
+local prev_start_mode = nil
+local prev_start_x, prev_start_y = nil, nil
+local prev_position_react = nil
+local prev_wiggle = nil
+local prev_scale_react = nil
+
 function script_description()
-  return ([[Cross-platform mouse reactor for OBS:
-• Windows, Linux (X11), macOS support
-• Follow mouse X/Y
-• Wiggle rotation
-• Scale on clicks
-• Optional custom start position
-• Smoothing]])
+  return "React to mouse and wiggle (:"
 end
 
 function script_properties()
   local p = obs.obs_properties_create()
 
-  -- Scene Dropdown
-  local scene_list = obs.obs_properties_add_list(p, "scene_name", "Scene", obs.OBS_COMBO_TYPE_EDITABLE, obs.OBS_COMBO_FORMAT_STRING)
+  -- Target group: Scene & Source
+  local target_props = obs.obs_properties_create()
+
+  -- Scene Dropdown within Target
+  local scene_list = obs.obs_properties_add_list(target_props, "scene_name", "Scene", obs.OBS_COMBO_TYPE_EDITABLE, obs.OBS_COMBO_FORMAT_STRING)
   local scenes = obs.obs_frontend_get_scenes()
   if scenes then
     for _, scene in ipairs(scenes) do
@@ -177,8 +181,8 @@ function script_properties()
     obs.source_list_release(scenes)
   end
 
-  -- Source Dropdown
-  local source_list = obs.obs_properties_add_list(p, "source_name", "Source", obs.OBS_COMBO_TYPE_EDITABLE, obs.OBS_COMBO_FORMAT_STRING)
+  -- Source Dropdown within Target
+  local source_list = obs.obs_properties_add_list(target_props, "source_name", "Source", obs.OBS_COMBO_TYPE_EDITABLE, obs.OBS_COMBO_FORMAT_STRING)
   local sources = obs.obs_enum_sources()
   if sources then
     for _, source in ipairs(sources) do
@@ -186,6 +190,8 @@ function script_properties()
     end
     obs.source_list_release(sources)
   end
+
+  obs.obs_properties_add_group(p, "target", "Target", obs.OBS_GROUP_NORMAL, target_props)
 
   -- Position React group
   local pos_props = obs.obs_properties_create()
@@ -326,14 +332,36 @@ function script_update(s)
   wiggle_scale_speed  = obs.obs_data_get_double (s, "wiggle_scale_speed")
   wiggle_scale_smoothing = obs.obs_data_get_double(s, "wiggle_scale_smoothing")
 
-  -- Reset internal state to reinitialize base position and other properties when settings change
-  base_pos_x   = nil
-  base_pos_y   = nil
-  cur_pos_x    = nil
-  cur_pos_y    = nil
-  cur_rot      = nil
-  cur_scale    = nil
-  frame        = 0
+  -- Reset only position state when position or scene/source/start settings change
+  if scene_name ~= prev_scene_name
+     or source_name ~= prev_source_name
+     or start_mode ~= prev_start_mode
+     or start_x ~= prev_start_x
+     or start_y ~= prev_start_y
+     or position_react ~= prev_position_react then
+    base_pos_x, base_pos_y = nil, nil
+    cur_pos_x, cur_pos_y = nil, nil
+    frame = 0
+  end
+
+  -- Reset rotation state only when wiggle toggles
+  if wiggle ~= prev_wiggle then
+    cur_rot = nil
+  end
+
+  -- Reset scale state only when scale reaction toggles
+  if scale_react ~= prev_scale_react then
+    cur_scale = nil
+  end
+
+  -- Store current settings for next update
+  prev_scene_name = scene_name
+  prev_source_name = source_name
+  prev_start_mode = start_mode
+  prev_start_x, prev_start_y = start_x, start_y
+  prev_position_react = position_react
+  prev_scale_react = scale_react
+  prev_wiggle = wiggle
 
   obs.timer_remove(on_tick)
   obs.timer_add(on_tick, update_interval_ms)
@@ -344,16 +372,16 @@ function script_load(s)
 end
 
 function on_tick()
-  local src = obs.obs_get_source_by_name(scene_name)
+  local src = obs_get_source(scene_name)
   if not src then return end
-  local scn = obs.obs_scene_from_source(src)
-  obs.obs_source_release(src)
-  local item = obs.obs_scene_find_source(scn, source_name)
+  local scn = obs_scene_from_source(src)
+  obs_source_release(src)
+  local item = obs_scene_find_source(scn, source_name)
   if not item then return end
 
   if base_pos_x == nil then
     if start_mode == 0 then
-      local init = obs.vec2()
+      local init = vec2()
       obs.obs_sceneitem_get_pos(item, init)
       base_pos_x, base_pos_y = init.x, init.y
     else
@@ -361,74 +389,60 @@ function on_tick()
     end
   end
 
-  -- Position reaction
-  local pos = obs.vec2()
+  -- Precompute time
+  local time = frame * update_interval_ms * 0.001
+
+  -- Position
+  local pos = vec2()
   if position_react then
     local mx, my = Platform.get_cursor_pos()
     local sw, sh = Platform.get_screen_size()
-    local tx = ((mx/sw)-0.5)*2*move_range_x + base_pos_x
-    local ty = ((my/sh)-0.5)*2*move_range_y + base_pos_y
+    local tx = ((mx/sw) - 0.5) * 2 * move_range_x + base_pos_x
+    local ty = ((my/sh) - 0.5) * 2 * move_range_y + base_pos_y
     if cur_pos_x == nil then cur_pos_x, cur_pos_y = tx, ty end
     cur_pos_x = cur_pos_x + (tx - cur_pos_x) * smoothing
     cur_pos_y = cur_pos_y + (ty - cur_pos_y) * smoothing
   else
     if cur_pos_x == nil then
-      local init = obs.vec2()
+      local init = vec2()
       obs.obs_sceneitem_get_pos(item, init)
       cur_pos_x, cur_pos_y = init.x, init.y
     end
   end
-  pos.x, pos.y = math.floor(cur_pos_x+0.5), math.floor(cur_pos_y+0.5)
+  pos.x, pos.y = round(cur_pos_x), round(cur_pos_y)
 
-  -- Apply position wiggling
   if wiggle then
-    local time = frame * update_interval_ms / 1000
-    local jx = math.sin(time * wiggle_pos_speed * 2 * math.pi) * wiggle_pos_amp_x
-    local jy = math.cos(time * wiggle_pos_speed * 2 * math.pi) * wiggle_pos_amp_y
-    pos.x = pos.x + math.floor(jx + 0.5)
-    pos.y = pos.y + math.floor(jy + 0.5)
-    obs.obs_sceneitem_set_pos(item, pos)
+    pos.x = pos.x + round(sin(time * wiggle_pos_speed * twopi) * wiggle_pos_amp_x)
+    pos.y = pos.y + round(cos(time * wiggle_pos_speed * twopi) * wiggle_pos_amp_y)
   end
+  obs_set_pos(item, pos)
 
-  obs.obs_sceneitem_set_pos(item, pos)
-
-  -- Wiggle rotation reaction
+  -- Rotation
   local rot = 0
   if wiggle then
-    local time = frame * update_interval_ms / 1000
-    local trot = math.sin(time * rotation_speed * 2 * math.pi) * rotation_amp
-    if cur_rot == nil then cur_rot = trot end
-    cur_rot = cur_rot + (trot - cur_rot) * rotation_smoothing
+    local target_rot = sin(time * rotation_speed * twopi) * rotation_amp
+    if cur_rot == nil then cur_rot = target_rot end
+    cur_rot = cur_rot + (target_rot - cur_rot) * rotation_smoothing
     rot = cur_rot
   else
-    rot = 0
     cur_rot = 0
   end
-  obs.obs_sceneitem_set_rot(item, rot)
+  obs_set_rot(item, rot)
 
-  -- Scale reaction
-  local sc_vec = obs.vec2()
+  -- Scale
   local scale_val = 1.0
   if scale_react then
-    local target = Platform.left_pressed() and scale_click_left
-                  or Platform.right_pressed() and scale_click_right
-                  or 1.0
+    local target = Platform.left_pressed() and scale_click_left or Platform.right_pressed() and scale_click_right or 1.0
     if cur_scale == nil then cur_scale = target end
     cur_scale = cur_scale + (target - cur_scale) * scale_smoothing
     scale_val = cur_scale
-  else
-    scale_val = 1.0
-    cur_scale = 1.0
   end
-
-  -- Apply scale wiggling
-  if wiggle then
-    local time = frame * update_interval_ms / 1000
-    local js = math.sin(time * wiggle_scale_speed * 2 * math.pi) * wiggle_scale_amp
-    scale_val = scale_val + js
+  if wiggle and wiggle_scale_amp > 0 then
+    scale_val = scale_val + sin(time * wiggle_scale_speed * twopi) * wiggle_scale_amp
   end
-  sc_vec.x, sc_vec.y = scale_val, scale_val
-  obs.obs_sceneitem_set_scale(item, sc_vec)
+  local sc = vec2()
+  sc.x, sc.y = scale_val, scale_val
+  obs_set_scale(item, sc)
 
   frame = frame + 1
 end
